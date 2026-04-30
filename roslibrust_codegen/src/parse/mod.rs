@@ -54,7 +54,7 @@ lazy_static::lazy_static! {
         ("string", "::std::string::String"),
         ("builtin_interfaces/Time", "::roslibrust::codegen::integral_types::Time"),
         ("builtin_interfaces/Duration", "::roslibrust::codegen::integral_types::Duration"),
-        // ("wstring", TODO),
+        ("wstring", "::std::string::String"),
     ].into_iter().collect();
 }
 

@@ -13,12 +13,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tokio_tungstenite::tungstenite::Message;
 
 use super::{
-    MessageQueue, PublisherHandle, Reader, ServiceCallback, ServiceClient, Socket, Subscription,
-    Writer, QUEUE_SIZE,
+    Message, MessageQueue, PublisherHandle, Reader, ServiceCallback, ServiceClient, Socket,
+    Subscription, Writer, QUEUE_SIZE,
 };
+
+macro_rules! spawn {
+    ($future:expr) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = tokio::spawn($future);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local($future);
+        }
+    };
+}
 
 /// Builder options for creating a client
 #[derive(Clone)]
@@ -92,10 +105,19 @@ impl ClientHandle {
 
         // Spawn the spin task
         // The internal stubborn spin task continues to try to reconnect on failure
+        #[cfg(not(target_arch = "wasm32"))]
         drop(tokio::task::spawn(stubborn_spin(
             inner_weak,
             is_disconnected.clone(),
         )));
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let is_disconnected_clone = is_disconnected.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = stubborn_spin(inner_weak, is_disconnected_clone).await;
+            });
+        }
 
         Ok(ClientHandle {
             inner,
@@ -469,7 +491,7 @@ impl ClientHandle {
     pub(crate) fn unadvertise_service(&self, topic: &str) {
         let copy = self.inner.clone();
         let topic = topic.to_string();
-        tokio::spawn(async move {
+        spawn!(async move {
             let client = copy.read().await;
             let entry = client.services.remove(&topic);
             // Since this is called by drop we can't really propagate and error and instead simply have to log
@@ -495,7 +517,7 @@ impl ClientHandle {
     pub(crate) fn unadvertise(&self, topic_name: &str) {
         let copy = self.clone();
         let topic_name_copy = topic_name.to_string();
-        tokio::spawn(async move {
+        spawn!(async move {
             // Remove publisher from our records
             let client = copy.inner.read().await;
             client.publishers.remove(&topic_name_copy);
@@ -520,7 +542,7 @@ impl ClientHandle {
         let topic_name = topic_name.to_string();
         let id = *id;
         // Actually send the unsubscribe message in a task so subscriber::Drop can call this function
-        tokio::spawn(async move {
+        spawn!(async move {
             // Identify the subscription entry for the subscriber
             let client = client.inner.read().await;
             let mut subscription = match client.subscriptions.get_mut(&topic_name) {
@@ -615,17 +637,25 @@ impl Client {
                     }
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::Close(close) => {
                 // TODO how should we respond to this?
                 // How do we represent connection status via our API well?
                 panic!("Close requested from server: {:?}", close);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::Ping(ping) => {
                 debug!("Ping received: {:?}", ping);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::Pong(pong) => {
                 debug!("Pong received {:?}", pong);
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            _ => {
+                panic!("Non-text response received");
+            }
+            #[cfg(target_arch = "wasm32")]
             _ => {
                 panic!("Non-text response received");
             }
@@ -683,6 +713,7 @@ impl Client {
     }
 
     async fn spin_once(&self) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
         let read = {
             let mut stream = self.reader.write().await;
             match stream.next().await {
@@ -690,6 +721,17 @@ impl Client {
                 Some(Err(e)) => {
                     return Err(Error::IoError(std::io::Error::other(e)));
                 }
+                None => {
+                    return Err(Error::Unexpected(anyhow!("Wtf does none mean here?")));
+                }
+            }
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let read = {
+            let mut stream = self.reader.write().await;
+            match stream.next().await {
+                Some(msg) => msg,
                 None => {
                     return Err(Error::Unexpected(anyhow!("Wtf does none mean here?")));
                 }
@@ -820,10 +862,19 @@ async fn stubborn_connect(url: &str) -> (Writer, Reader) {
 }
 
 // Basic connection attempt and error wrapping
+#[cfg(not(target_arch = "wasm32"))]
 async fn connect(url: &str) -> Result<Socket> {
     let attempt = tokio_tungstenite::connect_async(url).await;
     match attempt {
         Ok((stream, _response)) => Ok(stream),
         Err(e) => Err(Error::IoError(std::io::Error::other(e))),
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn connect(url: &str) -> Result<Socket> {
+    let (_meta, stream) = ws_stream_wasm::WsMeta::connect(url, None)
+        .await
+        .map_err(|e| Error::IoError(std::io::Error::other(e)))?;
+    Ok(stream)
 }

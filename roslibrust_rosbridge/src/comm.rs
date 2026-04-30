@@ -6,7 +6,11 @@ use log::debug;
 use roslibrust_common::{Error, Result, RosMessageType};
 use serde_json::json;
 use std::{fmt::Display, str::FromStr, string::ToString};
-use tokio_tungstenite::tungstenite::Message;
+
+use super::{
+    Message
+};
+
 
 /// Describes all documented rosbridge server operations
 pub(crate) enum Ops {
