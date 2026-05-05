@@ -81,7 +81,10 @@ pub trait Publish<T: RosMessageType> {
     // However see: https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html
     // This generates a warning is rust as of writing due to ambiguity around the "Send-ness" of the return type
     // We only plan to work with multi-threaded work stealing executors (e.g. tokio) so we're manually specifying Send
+    #[cfg(not(target_arch = "wasm32"))]
     fn publish(&self, data: &T) -> impl Future<Output = Result<()>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn publish(&self, data: &T) -> impl Future<Output = Result<()>>;
 }
 // ANCHOR_END: publish
 
@@ -98,7 +101,10 @@ where
     /// Returns the next message on the topic, or an Err as appropriate.
     /// [crate::Error] is currently quite generic, and the different backends can return different error variants in different circumstances.
     /// We hope to clean-up this error type substantially in the future.
+    #[cfg(not(target_arch = "wasm32"))]
     fn next(&mut self) -> impl Future<Output = Result<T>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn next(&mut self) -> impl Future<Output = Result<T>>;
 
     /// Converts the subscriber into an async [futures_core::Stream].
     /// This allows using the various adaptors in either [tokio_stream::StreamExt](https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html)
@@ -139,24 +145,39 @@ pub trait TopicProvider {
     /// If you wish to avoid repeated validation you can create a [GlobalTopicName] yourself and pass it in.
     ///
     /// The returned publisher is expected to be "self de-registering", where dropping the publisher results in the appropriate unadvertise operation.
+    #[cfg(not(target_arch = "wasm32"))]
     fn advertise<MsgType: RosMessageType>(
         &self,
         topic: impl ToGlobalTopicName,
     ) -> impl Future<Output = Result<Self::Publisher<MsgType>>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn advertise<MsgType: RosMessageType>(
+        &self,
+        topic: impl ToGlobalTopicName,
+    ) -> impl Future<Output = Result<Self::Publisher<MsgType>>>;
 
     /// Subscribes to a topic and returns a type specific subscriber to use.
     ///
     /// The returned subscriber is expected to be "self de-registering", where dropping the subscriber results in the appropriate unsubscribe operation.
+    #[cfg(not(target_arch = "wasm32"))]
     fn subscribe<MsgType: RosMessageType>(
         &self,
         topic: impl ToGlobalTopicName,
     ) -> impl Future<Output = Result<Self::Subscriber<MsgType>>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn subscribe<MsgType: RosMessageType>(
+        &self,
+        topic: impl ToGlobalTopicName,
+    ) -> impl Future<Output = Result<Self::Subscriber<MsgType>>>;
 }
 // ANCHOR_END: topic_provider
 
 /// Defines what it means to be something that is callable as a service
 pub trait Service<T: RosServiceType> {
+    #[cfg(not(target_arch = "wasm32"))]
     fn call(&self, request: &T::Request) -> impl Future<Output = Result<T::Response>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn call(&self, request: &T::Request) -> impl Future<Output = Result<T::Response>>;
 }
 
 /// This trait is analogous to TopicProvider, but instead provides the capability to create service servers and service clients
@@ -165,19 +186,32 @@ pub trait ServiceProvider {
     type ServiceServer: Send + Sync + 'static;
 
     /// A "oneshot" service call good for low frequency calls or where the service_provider may not always be available.
+    #[cfg(not(target_arch = "wasm32"))]
     fn call_service<SrvType: RosServiceType>(
         &self,
         service: impl ToGlobalTopicName,
         request: SrvType::Request,
     ) -> impl Future<Output = Result<SrvType::Response>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn call_service<SrvType: RosServiceType>(
+        &self,
+        service: impl ToGlobalTopicName,
+        request: SrvType::Request,
+    ) -> impl Future<Output = Result<SrvType::Response>>;
 
     /// An optimized version of call_service that returns a persistent client that can be used to repeatedly call a service.
     /// Depending on backend this may provide a performance benefit over call_service.
     /// Dropping the returned client will perform all needed cleanup.
+    #[cfg(not(target_arch = "wasm32"))]
     fn service_client<SrvType: RosServiceType + 'static>(
         &self,
         service: impl ToGlobalTopicName,
     ) -> impl Future<Output = Result<Self::ServiceClient<SrvType>>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn service_client<SrvType: RosServiceType + 'static>(
+        &self,
+        service: impl ToGlobalTopicName,
+    ) -> impl Future<Output = Result<Self::ServiceClient<SrvType>>>;
 
     /// Advertise a service function to be available for clients to call.
     /// A handle is returned that manages the lifetime of the service.
@@ -187,11 +221,18 @@ pub trait ServiceProvider {
     /// It is generally okay to perform blocking actions inside the service function.
     ///  - See [roslibrust/examples/ros1_service_server.rs](https://github.com/RosLibRust/roslibrust/blob/master/roslibrust/examples/ros1_service_server.rs) for a sync example of using this function.
     ///  - See [roslibrust/examples/ros1_async_service_server.rs](https://github.com/RosLibRust/roslibrust/blob/master/roslibrust/examples/ros1_async_service_server.rs) for an async example of using this function.
+    #[cfg(not(target_arch = "wasm32"))]
     fn advertise_service<SrvType: RosServiceType + 'static, F: ServiceFn<SrvType>>(
         &self,
         service: impl ToGlobalTopicName,
         server: F,
     ) -> impl Future<Output = Result<Self::ServiceServer>> + Send;
+    #[cfg(target_arch = "wasm32")]
+    fn advertise_service<SrvType: RosServiceType + 'static, F: ServiceFn<SrvType>>(
+        &self,
+        service: impl ToGlobalTopicName,
+        server: F,
+    ) -> impl Future<Output = Result<Self::ServiceServer>>;
 }
 
 // ANCHOR: ros_trait
