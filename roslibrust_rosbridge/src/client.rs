@@ -389,9 +389,24 @@ impl ClientHandle {
 
         // Having to do manual timeout logic here because of error types
         let recv = if let Some(timeout) = client.opts.timeout {
-            tokio::time::timeout(timeout, rx)
-                .await
-                .map_err(|e| Error::Timeout(format!("Service call timed out: {e:?}")))?
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                tokio::time::timeout(timeout, rx)
+                    .await
+                    .map_err(|e| Error::Timeout(format!("Service call timed out: {e:?}")))?
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                use futures::future::{select, Either};
+                let timeout_fut = gloo_timers::future::TimeoutFuture::new(timeout.as_millis() as u32);
+                futures::pin_mut!(rx);
+                futures::pin_mut!(timeout_fut);
+
+                match select(rx, timeout_fut).await {
+                    Either::Left((res, _)) => res,
+                    Either::Right((_, _)) => return Err(Error::Timeout("Service call timed out".to_string())),
+                }
+            }
         } else {
             rx.await
         };
@@ -692,9 +707,12 @@ impl Client {
 
         // Wrap evaluation of callback in a spawn_blocking to match trait expectations from roslibrust_common
         let callback = callback.value().clone();
+        #[cfg(not(target_arch = "wasm32"))]
         let response = tokio::task::spawn_blocking(move || (callback)(&request))
             .await
             .expect("Tokio should not cancel or panic in service task");
+        #[cfg(target_arch = "wasm32")]
+        let response = (callback)(&request);
         match response {
             Ok(res) => {
                 // TODO unwrap here is probably bad... Failure to write means disconnected?
@@ -806,8 +824,23 @@ async fn stubborn_spin(
         const SPIN_DURATION: Duration = Duration::from_millis(10);
 
         // Do a spin, important to not do this in the match or it keeps the lock alive in the branch arms
+        #[cfg(not(target_arch = "wasm32"))]
         let spin_result =
             tokio::time::timeout(SPIN_DURATION, client.read().await.spin_once()).await;
+        #[cfg(target_arch = "wasm32")]
+        let spin_result = {
+            use futures::future::{select, Either};
+            let timeout_fut = gloo_timers::future::TimeoutFuture::new(SPIN_DURATION.as_millis() as u32);
+            let client_lock = client.read().await;
+            let future = client_lock.spin_once();
+            futures::pin_mut!(future);
+            futures::pin_mut!(timeout_fut);
+
+            match select(future, timeout_fut).await {
+                Either::Left((res, _)) => Ok(res),
+                Either::Right((_, _)) => Err("timeout"),
+            }
+        };
 
         match spin_result {
             Ok(Ok(())) => {}
@@ -834,9 +867,24 @@ where
     F: futures::Future<Output = Result<T>>,
 {
     if let Some(t) = timeout {
-        tokio::time::timeout(t, future)
-            .await
-            .map_err(|e| Error::Timeout(format!("{e:?}")))?
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            tokio::time::timeout(t, future)
+                .await
+                .map_err(|e| Error::Timeout(format!("{e:?}")))?
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            use futures::future::{select, Either};
+            let timeout_fut = gloo_timers::future::TimeoutFuture::new(t.as_millis() as u32);
+            futures::pin_mut!(future);
+            futures::pin_mut!(timeout_fut);
+
+            match select(future, timeout_fut).await {
+                Either::Left((res, _)) => res,
+                Either::Right((_, _)) => Err(Error::Timeout("Service call timed out".to_string())),
+            }
+        }
     } else {
         future.await
     }
@@ -850,7 +898,10 @@ async fn stubborn_connect(url: &str) -> (Writer, Reader) {
             Err(e) => {
                 warn!("Failed to reconnect: {:?}", e);
                 // TODO configurable rate?
+                #[cfg(not(target_arch = "wasm32"))]
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                #[cfg(target_arch = "wasm32")]
+                gloo_timers::future::TimeoutFuture::new(200).await;
                 continue;
             }
             Ok(stream) => {
